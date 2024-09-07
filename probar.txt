@@ -1,0 +1,103 @@
+// use nix::{sys::stat::Mode, unistd::mkfifo};
+// use std::{ffi::CString, fs::File, process::Command};
+// use tokio::{io::AsyncWriteExt, net::unix::pipe};
+
+extern crate libc;
+use std::ffi::CString;
+
+use std::fs::File;
+use std::io::{self, prelude::*};
+use std::process::{Command, Stdio};
+
+// #[tokio::main]
+fn main() {
+    // let output = Command::new("/usr/bin/ffmpeg")
+    //     .args(&[
+    //         // "-i",
+    //         // "extend.mp3",
+    //         "-i",
+    //         "audio-2.mp3",
+    //         "-i",
+    //         "audio-3.mp3",
+    //         "-filter_complex",
+    //         "amix=inputs=2:duration=first",
+    //         "-f",
+    //         "mp3",
+    //         "pipe:1>mypipe",
+    //     ])
+    //     .output()
+    //     .unwrap();
+
+    // let aux = output.stdout;
+
+    ////////////////
+
+    // println!("{:?}", aux);
+
+    // const FIFO_NAME: &str = "/tmp/test";
+
+    // let filename = CString::new(FIFO_NAME).unwrap();
+    // unsafe {
+    //     libc::mkfifo(filename.as_ptr(), 0o644);
+    // }
+
+    // let rx = pipe::OpenOptions::new().open_receiver(FIFO_NAME).unwrap();
+    // let tx = pipe::OpenOptions::new().open_sender(FIFO_NAME).unwrap();
+
+    // // mkfifo(FIFO_NAME, Mode::S_IRWXU).unwrap();
+    // let mut tx = pipe::OpenOptions::new()
+    //     .read_write(true)
+    //     .unchecked(true)
+    //     .open_sender(FIFO_NAME)
+    //     .unwrap();
+
+    // tx.write_all(aux.as_ref());
+
+    // /////////////////////
+    // let path = "/tmp/test";
+    // let filename = CString::new(path.clone()).unwrap();
+    // unsafe {
+    //     libc::mkfifo(filename.as_ptr(), 0o644);
+    // }
+
+    // println!("START");
+    // let mut f = File::open(&path).expect("file not found");
+    // let mut read_buff = vec![];
+    // f.read_to_end(&mut read_buff);
+    // println!("END {:?}", read_buff);
+
+    // f.write_all("Hello, World!".as_bytes()).expect("failed");
+
+    test();
+}
+
+fn test() -> io::Result<()> {
+    let mut child = Command::new("cat")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()?;
+
+    let child_stdin = child.stdin.as_mut().unwrap();
+    child_stdin.write_all(b"Hello, world!\n")?;
+    // Close stdin to finish and avoid indefinite blocking
+    drop(child_stdin);
+
+    let output = child.wait_with_output()?;
+
+    println!("output = {:?}", output);
+
+    Ok(())
+}
+
+// ffmpeg  -i audio-2.mp3 -i audio-3.mp3 -filter_complex amix=inputs=3:duration=first output.mp3
+
+// ffmpeg -i audio-1.mp3 -i audio-2.mp3 -filter_complex amix=inputs=2:duration=first -f mp3 pipe:1 > mypipe
+
+// cat mypipe > output.mp3
+
+// ffmpeg -i audio-1.mp3 -af "adelay=7000|7000:all=true" extend.mp3
+
+
+// 1 - Transformar audios inputs en un Vec<u8> tipo Buffer
+// 2 - Ingresar inputs en el commando de ffmpeg. Seguir este ejemplo https://stackoverflow.com/questions/45899585/pipe-input-in-to-ffmpeg-stdin
+// 3 - Transformar audio producido en Buffer a base64

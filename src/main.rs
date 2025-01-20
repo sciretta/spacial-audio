@@ -1,30 +1,85 @@
-mod core;
-use core::{
-    convert_buffer_into_file_audio, convert_file_audio_into_buffer, ffmpeg_blend_audios,
-    ffmpeg_delay_audio,
-};
+use hyper::service::{make_service_fn, service_fn};
+use hyper::{Body, Request, Response, Server};
+use std::collections::HashMap;
+use std::convert::Infallible;
+use std::sync::{Arc, Mutex};
+use tokio::sync::Mutex as TokioMutex;
 
-fn main() {
-    let audio_buffer_1 = convert_file_audio_into_buffer("audio-1.mp3").unwrap();
-    let audio_buffer_2 = convert_file_audio_into_buffer("audio-2.mp3").unwrap();
-
-    let bended_audio_buffer =
-        ffmpeg_blend_audios(vec![audio_buffer_1.clone(), audio_buffer_2]).unwrap();
-    convert_buffer_into_file_audio(bended_audio_buffer, "blended.mp3").unwrap();
-
-    // let extended_audio_buffer = ffmpeg_delay_audio(audio_buffer_1, 1).unwrap();
-
-    // convert_buffer_into_file_audio(extended_audio_buffer, "extended.mp3").unwrap();
+#[derive(Debug)]
+struct AudioData {
+    metadata: String,
+    audio_buffer: Vec<Vec<u8>>,
 }
 
-// ffmpeg  -i audio-2.mp3 -i audio-3.mp3 -filter_complex amix=inputs=3:duration=first output.mp3
+struct AppState {
+    sessions: TokioMutex<HashMap<String, AudioData>>,
+}
 
-// ffmpeg -i audio-1.mp3 -i audio-2.mp3 -filter_complex amix=inputs=2:duration=first -f mp3 pipe:1 > mypipe
+async fn create_session(
+    req: Request<Body>,
+    state: Arc<AppState>,
+) -> Result<Response<Body>, Infallible> {
+    let metadata = req
+        .headers()
+        .get("metadata")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let session_code = req
+        .headers()
+        .get("sessioncode")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let whole_body = hyper::body::to_bytes(req.into_body()).await.unwrap();
 
-// cat mypipe > output.mp3
+    // Store the received audio buffer and metadata in memory
+    let mut sessions = state.sessions.lock().await;
+    sessions.insert(
+        session_code,
+        AudioData {
+            metadata,
+            audio_buffer: vec![whole_body.to_vec()],
+        },
+    );
 
-// ffmpeg -i audio-1.mp3 -af "adelay=7000|7000:all=true" extend.mp3
+    // Print the current state of the HashMap
+    println!("Current sessions: {:?}", *sessions);
 
-// 1 - Transformar audios inputs en un Vec<u8> tipo Buffer
-// 2 - Ingresar inputs en el commando de ffmpeg. Seguir este ejemplo https://stackoverflow.com/questions/45899585/pipe-input-in-to-ffmpeg-stdin
-// 3 - Transformar audio producido en Buffer a base64
+    Ok(Response::new(Body::from(
+        "Audio buffer and metadata received",
+    )))
+}
+
+async fn router(req: Request<Body>, state: Arc<AppState>) -> Result<Response<Body>, Infallible> {
+    println!("Request received URI: {}", req.uri().path());
+
+    match req.uri().path() {
+        "/create-session" => create_session(req, state).await,
+        _ => Ok(Response::new(Body::from("Invalid path"))),
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    let state = Arc::new(AppState {
+        sessions: TokioMutex::new(HashMap::new()),
+    });
+
+    let make_svc = make_service_fn(move |_conn| {
+        let state = state.clone();
+        async move { Ok::<_, Infallible>(service_fn(move |req| router(req, state.clone()))) }
+    });
+
+    let addr = ([127, 0, 0, 1], 3000).into();
+
+    let server = Server::bind(&addr).serve(make_svc);
+
+    println!("Listening on http://{}", addr);
+
+    if let Err(e) = server.await {
+        eprintln!("server error: {}", e);
+    }
+}

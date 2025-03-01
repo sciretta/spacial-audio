@@ -2,7 +2,7 @@ use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server};
 use std::collections::HashMap;
 use std::convert::Infallible;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::sync::broadcast;
 use tokio::sync::Mutex as TokioMutex;
 
@@ -10,8 +10,8 @@ mod handlers;
 
 #[derive(Debug, Clone)]
 struct AudioData {
-    metadata: String,
-    finished: bool,
+    connected_guests: u8,
+    is_session_finished: bool,
     audio_buffer: Vec<Vec<u8>>,
 }
 
@@ -21,9 +21,6 @@ struct AppState {
 }
 
 async fn router(req: Request<Body>, state: Arc<AppState>) -> Result<Response<Body>, Infallible> {
-    println!("Request received URI: {}", req.uri().path());
-    println!("Current sessions: {:?}", state.sessions);
-
     match (req.uri().path(), req.method()) {
         ("/create-session", &Method::POST) => handlers::create_session(req, state).await,
         ("/add-buffer", &Method::POST) => handlers::add_buffer(req, state).await,
@@ -56,6 +53,3 @@ async fn main() {
         eprintln!("server error: {}", e);
     }
 }
-
-// 1. SSE para forzar el metodo add_buffer en los guests
-// 2. Limpiar datos de la session de la memoria

@@ -6,29 +6,20 @@ use serde_json::json;
 use std::convert::Infallible;
 use std::sync::Arc;
 use tokio::sync::broadcast;
-use tokio::sync::Mutex as TokioMutex;
 
 pub async fn create_session(
-    req: Request<Body>,
+    _req: Request<Body>,
     state: Arc<AppState>,
 ) -> Result<Response<Body>, Infallible> {
     let code_charset = "1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    let metadata: String = req
-        .headers()
-        .get("metadata")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .to_string();
     let session_code = generate(8, code_charset);
 
-    // Store the received audio buffer and metadata in memory
     let mut sessions = state.sessions.lock().await;
     sessions.insert(
         session_code.clone(),
         AudioData {
-            metadata,
-            finished: false,
+            is_session_finished: false,
+            connected_guests: 0,
             audio_buffer: vec![],
         },
     );
@@ -49,13 +40,6 @@ pub async fn add_buffer(
     req: Request<Body>,
     state: Arc<AppState>,
 ) -> Result<Response<Body>, Infallible> {
-    let metadata = req
-        .headers()
-        .get("metadata")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .to_string();
     let session_code = req
         .headers()
         .get("sessioncode")
@@ -65,15 +49,17 @@ pub async fn add_buffer(
         .to_string();
     let whole_body = hyper::body::to_bytes(req.into_body()).await.unwrap();
 
-    // Store the received audio buffer and metadata in memory
     let mut sessions = state.sessions.lock().await;
     let session = sessions.get_mut(&session_code);
 
     match session {
         Some(session) => {
+            if session.connected_guests == (session.audio_buffer.len() + 1) as u8 {
+                session.is_session_finished = true;
+            }
             session.audio_buffer.push(whole_body.to_vec());
             Ok(Response::new(Body::from(
-                "Audio buffer and metadata added successfully to the session",
+                "Audio buffer added successfully to the session",
             )))
         }
         None => return Ok(Response::new(Body::from("Session not found"))),
@@ -93,14 +79,20 @@ pub async fn get_session(
         .to_string();
 
     let sessions = state.sessions.lock().await;
-    let session = sessions.get(&session_code);
+    let session: Option<&AudioData> = sessions.get(&session_code);
 
     match session {
         Some(session) => {
+            println!("SESSION {:?}", session);
+            if !session.is_session_finished {
+                return Ok(Response::new(Body::from("Session not finished yet")));
+            }
             let mut audio_buffer = vec![];
             for buffer in &session.audio_buffer {
                 audio_buffer.extend_from_slice(buffer);
+                audio_buffer.extend_from_slice(&[0x3d, 0x3d, 0x3d, 0x3d, 0x3d]);
             }
+            remove_session_private_method(session_code, state.clone()).await;
             Ok(Response::new(Body::from(audio_buffer)))
         }
         None => Ok(Response::new(Body::from("Session not found"))),
@@ -119,7 +111,17 @@ pub async fn sse_handler(
         .unwrap()
         .to_string();
 
-    let mut subscribers = state.subscribers.lock().await;
+    let subscribers = state.subscribers.lock().await;
+    let mut sessions = state.sessions.lock().await;
+    let session = sessions.get_mut(&session_code);
+
+    match session {
+        Some(session) => {
+            session.connected_guests = session.connected_guests + 1;
+        }
+        None => {}
+    }
+
     if let Some(tx) = subscribers.get(&session_code) {
         let mut rx = tx.subscribe();
 
@@ -165,11 +167,8 @@ pub async fn set_finished(
         .to_string();
 
     let mut sessions = state.sessions.lock().await;
-    if let Some(session) = sessions.get_mut(&session_code) {
-        session.finished = true;
-
-        // Notify all subscribers
-        let mut subscribers = state.subscribers.lock().await;
+    if let Some(_) = sessions.get_mut(&session_code) {
+        let subscribers = state.subscribers.lock().await;
         if let Some(tx) = subscribers.get(&session_code) {
             let _ = tx.send("session_finished".to_string());
         }
@@ -178,4 +177,13 @@ pub async fn set_finished(
     } else {
         Ok(Response::new(Body::from("Session not found")))
     }
+}
+
+async fn remove_session_private_method(session_code: String, state: Arc<AppState>) {
+    // let mut sessions = state.sessions.lock().await;
+    // sessions.remove(&session_code);
+    // let mut subscribers = state.subscribers.lock().await;
+    // subscribers.remove(&session_code);
+
+    println!("REMOVE SESSION {}", session_code);
 }
